@@ -16,11 +16,12 @@ COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 COPY README.md ./
 
-# 3. Install dependencies AND the project
-RUN uv sync --frozen --no-dev --no-editable
+# 3. Install dependencies only (skip project install to avoid path issues)
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Update PATH to include the virtual environment's bin
+# Update PATH to include the virtual environment's bin and PYTHONPATH for src
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src:$PYTHONPATH"
 
 # Entry point
 ENTRYPOINT ["mcp-discord"]

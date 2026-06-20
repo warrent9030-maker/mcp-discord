@@ -24,4 +24,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:$PYTHONPATH"
 
 # Entry point
-ENTRYPOINT ["mcp-discord"]
+ENTRYPOINT ["python", "-c", "import discord_mcp; discord_mcp.main()"]

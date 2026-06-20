@@ -23,5 +23,5 @@ RUN uv sync --frozen --no-dev --no-install-project
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:$PYTHONPATH"
 
-# Entry point
-ENTRYPOINT ["python", "-c", "import discord_mcp; discord_mcp.main()"]
+# Entry point using the virtual environment's python
+ENTRYPOINT ["/app/.venv/bin/python", "-c", "import discord_mcp; discord_mcp.main()"]

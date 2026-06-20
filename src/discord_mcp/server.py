@@ -5,7 +5,7 @@ import logging
 import json
 import aiohttp
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 from functools import wraps
 import discord
 from discord.ext import commands
@@ -398,6 +398,44 @@ async def list_tools() -> List[Tool]:
                 },
                 'required': ['server_id']
             }
+        ),
+        Tool(
+            name='update_role',
+            description='Update a role in a Discord server.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'role_id': {
+                        'type': 'string',
+                        'description': 'Role ID to update'
+                    },
+                    'name': {
+                        'type': 'string',
+                        'description': 'Optional new name for the role'
+                    },
+                    'permissions': {
+                        'type': 'number',
+                        'description': 'Optional new permission bitmask for the role'
+                    },
+                    'color': {
+                        'type': 'number',
+                        'description': 'Optional new color for the role (integer)'
+                    },
+                    'hoist': {
+                        'type': 'boolean',
+                        'description': 'Optional whether the role should be displayed separately in the sidebar'
+                    },
+                    'mentionable': {
+                        'type': 'boolean',
+                        'description': 'Optional whether the role should be mentionable'
+                    }
+                },
+                'required': ['server_id', 'role_id']
+            }
         )
     ]
 
@@ -500,6 +538,32 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
             detailed_roles.append(role_info)
             
         return [TextContent(type='text', text=json.dumps(detailed_roles, indent=2))]
+    elif name == 'update_role':
+        server_id = arguments['server_id']
+        role_id = arguments['role_id']
+        url = f"https://discord.com/api/v10/guilds/{server_id}/roles/{role_id}"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {}
+        for field in ['name', 'permissions', 'color', 'hoist', 'mentionable']:
+            if field in arguments:
+                # API expects string for permissions
+                if field == 'permissions':
+                    payload[field] = str(int(arguments[field]))
+                else:
+                    payload[field] = arguments[field]
+                    
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error updating role: {resp.status} - {error_text}")]
+                updated_role = await resp.json()
+                
+        return [TextContent(type='text', text=f"Role updated successfully: {json.dumps(updated_role, indent=2)}")]
         
     raise ValueError(f'Unknown tool: {name}')
 

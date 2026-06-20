@@ -454,8 +454,8 @@ async def main():
         from mcp.server.sse import SseServerTransport
         transport = SseServerTransport("/messages")
         async def handle_sse(request):
-            async with transport.connect_scope(request.scope, request.receive, request._send):
-                await app.run(transport.read_stream, transport.write_stream, app.create_initialization_options())
+            async with transport.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+                await app.run(read_stream, write_stream, app.create_initialization_options())
         async def handle_messages(request):
             await transport.handle_post_message(request.scope, request.receive, request._send)
         

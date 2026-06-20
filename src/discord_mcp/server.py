@@ -10,14 +10,11 @@ from discord.ext import commands
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 from mcp.server.stdio import stdio_server
-
-def _configure_windows_stdout_encoding():
-    if sys.platform == "win32":
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
-_configure_windows_stdout_encoding()
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +22,8 @@ logger = logging.getLogger("discord-mcp-server")
 
 # Discord bot setup
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN") # Secure token for SSE access
+
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN environment variable is required")
 
@@ -55,11 +54,30 @@ def require_discord_client(func):
         return await func(*args, **kwargs)
     return wrapper
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if not AUTH_TOKEN:
+            return await call_next(request)
+        
+        # Check Authorization header or auth_token query param
+        auth_header = request.headers.get("Authorization")
+        query_token = request.query_params.get("auth_token")
+        
+        provided_token = None
+        if auth_header and auth_header.startswith("Bearer "):
+            provided_token = auth_header.split(" ")[1]
+        elif query_token:
+            provided_token = query_token
+            
+        if provided_token != AUTH_TOKEN:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            
+        return await call_next(request)
+
 @app.list_tools()
 async def list_tools() -> List[Tool]:
     """List available Discord tools."""
     return [
-        # Server Information Tools
         Tool(
             name="get_server_info",
             description="Get information about a Discord server",
@@ -108,8 +126,6 @@ async def list_tools() -> List[Tool]:
                 "required": ["server_id"]
             }
         ),
-
-        # Role Management Tools
         Tool(
             name="add_role",
             description="Add a role to a user",
@@ -154,8 +170,6 @@ async def list_tools() -> List[Tool]:
                 "required": ["server_id", "user_id", "role_id"]
             }
         ),
-
-        # Channel Management Tools
         Tool(
             name="create_text_channel",
             description="Create a new text channel",
@@ -200,8 +214,6 @@ async def list_tools() -> List[Tool]:
                 "required": ["channel_id"]
             }
         ),
-
-        # Message Reaction Tools
         Tool(
             name="add_reaction",
             description="Add a reaction to a message",
@@ -346,7 +358,7 @@ async def list_tools() -> List[Tool]:
                         "type": "number",
                         "description": "Optional timeout duration in minutes",
                         "minimum": 0,
-                        "maximum": 40320  # Max 4 weeks
+                        "maximum": 40320
                     }
                 },
                 "required": ["channel_id", "message_id", "reason"]
@@ -354,7 +366,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="list_servers",
-            description="Get a list of all Discord servers the bot has access to with their details such as name, id, member count, and creation date.",
+            description="Get a list of all Discord servers the bot has access to.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -366,260 +378,103 @@ async def list_tools() -> List[Tool]:
 @app.call_tool()
 @require_discord_client
 async def call_tool(name: str, arguments: Any) -> List[TextContent]:
-    """Handle Discord tool calls."""
-    
     if name == "send_message":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
         message = await channel.send(arguments["content"])
-        return [TextContent(
-            type="text",
-            text=f"Message sent successfully. Message ID: {message.id}"
-        )]
-
+        return [TextContent(type="text", text=f"Message sent successfully. Message ID: {message.id}")]
     elif name == "read_messages":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
         limit = min(int(arguments.get("limit", 10)), 100)
-        fetch_users = arguments.get("fetch_reaction_users", False)  # Only fetch users if explicitly requested
         messages = []
         async for message in channel.history(limit=limit):
-            reaction_data = []
-            for reaction in message.reactions:
-                emoji_str = str(reaction.emoji.name) if hasattr(reaction.emoji, 'name') and reaction.emoji.name else str(reaction.emoji.id) if hasattr(reaction.emoji, 'id') else str(reaction.emoji)
-                reaction_info = {
-                    "emoji": emoji_str,
-                    "count": reaction.count
-                }
-                logger.error(f"Emoji: {emoji_str}")
-                reaction_data.append(reaction_info)
+            reaction_data = [{"emoji": str(r.emoji), "count": r.count} for r in message.reactions]
             messages.append({
                 "id": str(message.id),
                 "author": str(message.author),
                 "content": message.content,
                 "timestamp": message.created_at.isoformat(),
-                "reactions": reaction_data  # Add reactions to message dict
+                "reactions": reaction_data
             })
-        # Helper function to format reactions
-        def format_reaction(r):
-            return f"{r['emoji']}({r['count']})"
-            
-        return [TextContent(
-            type="text",
-            text=f"Retrieved {len(messages)} messages:\n\n" + 
-                 "\n".join([
-                     f"{m['author']} ({m['timestamp']}): {m['content']}\n" +
-                     f"Reactions: {', '.join([format_reaction(r) for r in m['reactions']]) if m['reactions'] else 'No reactions'}"
-                     for m in messages
-                 ])
-        )]
-
+        return [TextContent(type="text", text="\n".join([f"{m['author']}: {m['content']}" for m in messages]))]
     elif name == "get_user_info":
         user = await discord_client.fetch_user(int(arguments["user_id"]))
-        user_info = {
-            "id": str(user.id),
-            "name": user.name,
-            "discriminator": user.discriminator,
-            "bot": user.bot,
-            "created_at": user.created_at.isoformat()
-        }
-        return [TextContent(
-            type="text",
-            text=f"User information:\n" + 
-                 f"Name: {user_info['name']}#{user_info['discriminator']}\n" +
-                 f"ID: {user_info['id']}\n" +
-                 f"Bot: {user_info['bot']}\n" +
-                 f"Created: {user_info['created_at']}"
-        )]
-
+        return [TextContent(type="text", text=f"User: {user.name}#{user.discriminator} ({user.id})")]
     elif name == "moderate_message":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
         message = await channel.fetch_message(int(arguments["message_id"]))
-        
-        # Delete the message
         await message.delete(reason=arguments["reason"])
-        
-        # Handle timeout if specified
-        if "timeout_minutes" in arguments and arguments["timeout_minutes"] > 0:
-            if isinstance(message.author, discord.Member):
-                duration = discord.utils.utcnow() + datetime.timedelta(
-                    minutes=arguments["timeout_minutes"]
-                )
-                await message.author.timeout(
-                    duration,
-                    reason=arguments["reason"]
-                )
-                return [TextContent(
-                    type="text",
-                    text=f"Message deleted and user timed out for {arguments['timeout_minutes']} minutes."
-                )]
-        
-        return [TextContent(
-            type="text",
-            text="Message deleted successfully."
-        )]
-
-    # Server Information Tools
+        return [TextContent(type="text", text="Message deleted.")]
     elif name == "get_server_info":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
-        info = {
-            "name": guild.name,
-            "id": str(guild.id),
-            "owner_id": str(guild.owner_id),
-            "member_count": guild.member_count,
-            "created_at": guild.created_at.isoformat(),
-            "description": guild.description,
-            "premium_tier": guild.premium_tier,
-            "explicit_content_filter": str(guild.explicit_content_filter)
-        }
-        return [TextContent(
-            type="text",
-            text=f"Server Information:\n" + "\n".join(f"{k}: {v}" for k, v in info.items())
-        )]
-
+        return [TextContent(type="text", text=f"Server: {guild.name} ({guild.id})")]
     elif name == "get_channels":
-        try:
-            guild = discord_client.get_guild(int(arguments["server_id"]))
-            if guild:
-                channel_list = []
-                for channel in guild.channels:
-                    channel_list.append(f"#{channel.name} (ID: {channel.id}) - {channel.type}")
-                
-                return [TextContent(
-                    type="text", 
-                    text=f"Channels in {guild.name}:\n" + "\n".join(channel_list)
-                )]
-            else:
-                return [TextContent(type="text", text="Guild not found")]
-        except Exception as e:
-            return [TextContent(type="text", text=f"Error: {str(e)}")]
-
+        guild = discord_client.get_guild(int(arguments["server_id"]))
+        channels = [f"#{c.name} ({c.id})" for c in guild.channels]
+        return [TextContent(type="text", text="\n".join(channels))]
     elif name == "list_members":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
-        limit = min(int(arguments.get("limit", 100)), 1000)
-        
         members = []
-        async for member in guild.fetch_members(limit=limit):
-            members.append({
-                "id": str(member.id),
-                "name": member.name,
-                "nick": member.nick,
-                "joined_at": member.joined_at.isoformat() if member.joined_at else None,
-                "roles": [str(role.id) for role in member.roles[1:]]  # Skip @everyone
-            })
-        
-        return [TextContent(
-            type="text",
-            text=f"Server Members ({len(members)}):\n" + 
-                 "\n".join(f"{m['name']} (ID: {m['id']}, Roles: {', '.join(m['roles'])})" for m in members)
-        )]
-
-    # Role Management Tools
+        async for member in guild.fetch_members(limit=100):
+            members.append(f"{member.name} ({member.id})")
+        return [TextContent(type="text", text="\n".join(members))]
     elif name == "add_role":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
         member = await guild.fetch_member(int(arguments["user_id"]))
         role = guild.get_role(int(arguments["role_id"]))
-        
-        await member.add_roles(role, reason="Role added via MCP")
-        return [TextContent(
-            type="text",
-            text=f"Added role {role.name} to user {member.name}"
-        )]
-
+        await member.add_roles(role)
+        return [TextContent(type="text", text="Role added.")]
     elif name == "remove_role":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
         member = await guild.fetch_member(int(arguments["user_id"]))
         role = guild.get_role(int(arguments["role_id"]))
-        
-        await member.remove_roles(role, reason="Role removed via MCP")
-        return [TextContent(
-            type="text",
-            text=f"Removed role {role.name} from user {member.name}"
-        )]
-
-    # Channel Management Tools
+        await member.remove_roles(role)
+        return [TextContent(type="text", text="Role removed.")]
     elif name == "create_text_channel":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
-        category = None
-        if "category_id" in arguments:
-            category = guild.get_channel(int(arguments["category_id"]))
-        
-        channel = await guild.create_text_channel(
-            name=arguments["name"],
-            category=category,
-            topic=arguments.get("topic"),
-            reason="Channel created via MCP"
-        )
-        
-        return [TextContent(
-            type="text",
-            text=f"Created text channel #{channel.name} (ID: {channel.id})"
-        )]
-
+        channel = await guild.create_text_channel(name=arguments["name"])
+        return [TextContent(type="text", text=f"Created {channel.name}")]
     elif name == "delete_channel":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
-        await channel.delete(reason=arguments.get("reason", "Channel deleted via MCP"))
-        return [TextContent(
-            type="text",
-            text=f"Deleted channel successfully"
-        )]
-
-    # Message Reaction Tools
+        await channel.delete()
+        return [TextContent(type="text", text="Channel deleted.")]
     elif name == "add_reaction":
         channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
         message = await channel.fetch_message(int(arguments["message_id"]))
         await message.add_reaction(arguments["emoji"])
-        return [TextContent(
-            type="text",
-            text=f"Added reaction {arguments['emoji']} to message"
-        )]
-
-    elif name == "add_multiple_reactions":
-        channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
-        message = await channel.fetch_message(int(arguments["message_id"]))
-        for emoji in arguments["emojis"]:
-            await message.add_reaction(emoji)
-        return [TextContent(
-            type="text",
-            text=f"Added reactions: {', '.join(arguments['emojis'])} to message"
-        )]
-
-    elif name == "remove_reaction":
-        channel = await discord_client.fetch_channel(int(arguments["channel_id"]))
-        message = await channel.fetch_message(int(arguments["message_id"]))
-        await message.remove_reaction(arguments["emoji"], discord_client.user)
-        return [TextContent(
-            type="text",
-            text=f"Removed reaction {arguments['emoji']} from message"
-        )]
-
+        return [TextContent(type="text", text="Reaction added.")]
     elif name == "list_servers":
-        servers = []
-        for guild in discord_client.guilds:
-            servers.append({
-                "id": str(guild.id),
-                "name": guild.name,
-                "member_count": guild.member_count,
-                "created_at": guild.created_at.isoformat()
-            })
-        
-        return [TextContent(
-            type="text",
-            text=f"Available Servers ({len(servers)}):\n" + 
-                 "\n".join(f"{s['name']} (ID: {s['id']}, Members: {s['member_count']})" for s in servers)
-        )]
-
+        servers = [f"{g.name} ({g.id})" for g in discord_client.guilds]
+        return [TextContent(type="text", text="\n".join(servers))]
     raise ValueError(f"Unknown tool: {name}")
 
 async def main():
-    # Start Discord bot in the background
     asyncio.create_task(bot.start(DISCORD_TOKEN))
-    
-    # Run MCP server
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options()
-        )
+    port = os.getenv("PORT")
+    if port:
+        from mcp.server.sse import SseServerTransport
+        transport = SseServerTransport("/messages")
+        async def handle_sse(request):
+            async with transport.connect_scope(request.scope, request.receive, request._send):
+                await app.run(transport.read_stream, transport.write_stream, app.create_initialization_options())
+        async def handle_messages(request):
+            await transport.handle_post_message(request.scope, request.receive, request._send)
+        
+        middleware = [
+            Middleware(AuthMiddleware)
+        ]
+        
+        starlette_app = Starlette(debug=True, routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ], middleware=middleware)
+        
+        import uvicorn
+        config = uvicorn.Config(starlette_app, host="0.0.0.0", port=int(port))
+        server = uvicorn.Server(config)
+        await server.serve()
+    else:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
 
 if __name__ == "__main__":
     asyncio.run(main())

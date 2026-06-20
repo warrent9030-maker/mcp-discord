@@ -15,6 +15,8 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
+import json
+import aiohttp
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -76,7 +78,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 @app.list_tools()
 async def list_tools() -> List[Tool]:
-    """List available Discord tools."""
+    \"\"\"List available Discord tools.\"\"\"
     return [
         Tool(
             name="get_server_info",
@@ -372,6 +374,20 @@ async def list_tools() -> List[Tool]:
                 "properties": {},
                 "required": []
             }
+        ),
+        Tool(
+            name="list_roles",
+            description="Get a list of all roles in a Discord server including permissions",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "Discord server (guild) ID"
+                    }
+                },
+                "required": ["server_id"]
+            }
         )
     ]
 
@@ -387,7 +403,7 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         limit = min(int(arguments.get("limit", 10)), 100)
         messages = []
         async for message in channel.history(limit=limit):
-            reaction_data = [{"emoji": str(r.emoji), "count": r.count} for r in message.reactions]
+            reaction_data = [{\"emoji\": str(r.emoji), \"count\": r.count} for r in message.reactions]
             messages.append({
                 "id": str(message.id),
                 "author": str(message.author),
@@ -395,7 +411,7 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 "timestamp": message.created_at.isoformat(),
                 "reactions": reaction_data
             })
-        return [TextContent(type="text", text="\n".join([f"{m['author']}: {m['content']}" for m in messages]))]
+        return [TextContent(type="text", text="\\n".join([f\"{m['author']}: {m['content']}\" for m in messages]))]
     elif name == "get_user_info":
         user = await discord_client.fetch_user(int(arguments["user_id"]))
         return [TextContent(type="text", text=f"User: {user.name}#{user.discriminator} ({user.id})")]
@@ -409,14 +425,14 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         return [TextContent(type="text", text=f"Server: {guild.name} ({guild.id})")]
     elif name == "get_channels":
         guild = discord_client.get_guild(int(arguments["server_id"]))
-        channels = [f"#{c.name} ({c.id})" for c in guild.channels]
-        return [TextContent(type="text", text="\n".join(channels))]
+        channels = [f\"#{c.name} ({c.id})\" for c in guild.channels]
+        return [TextContent(type="text", text="\\n".join(channels))]
     elif name == "list_members":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
         members = []
         async for member in guild.fetch_members(limit=100):
-            members.append(f"{member.name} ({member.id})")
-        return [TextContent(type="text", text="\n".join(members))]
+            members.append(f\"{member.name} ({member.id})\")
+        return [TextContent(type="text", text="\\n".join(members))]
     elif name == "add_role":
         guild = await discord_client.fetch_guild(int(arguments["server_id"]))
         member = await guild.fetch_member(int(arguments["user_id"]))
@@ -443,8 +459,56 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         await message.add_reaction(arguments["emoji"])
         return [TextContent(type="text", text="Reaction added.")]
     elif name == "list_servers":
-        servers = [f"{g.name} ({g.id})" for g in discord_client.guilds]
-        return [TextContent(type="text", text="\n".join(servers))]
+        servers = [f\"{g.name} ({g.id})\" for g in discord_client.guilds]
+        return [TextContent(type="text", text="\\n".join(servers))]
+    elif name == "list_roles":
+        guild_id = arguments["server_id"]
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=headers) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type="text", text=f"Failed to fetch roles: {error_text}")]
+                roles_data = await resp.json()
+        
+        PERMISSIONS = {
+            1 << 0: "Create Instant Invite", 1 << 1: "Kick Members", 1 << 2: "Ban Members",
+            1 << 3: "Administrator", 1 << 4: "Manage Channels", 1 << 5: "Manage Guild",
+            1 << 6: "Add Reactions", 1 << 7: "View Audit Log", 1 << 8: "Priority Speaker",
+            1 << 9: "Stream", 1 << 10: "View Channel", 1 << 11: "Send Messages",
+            1 << 12: "Send TTS Messages", 1 << 13: "Manage Messages", 1 << 14: "Embed Links",
+            1 << 15: "Attach Files", 1 << 16: "Read Message History",
+            1 << 17: "Mention @everyone, @here, and All Roles", 1 << 18: "Use External Emojis",
+            1 << 19: "View Guild Insights", 1 << 20: "Connect", 1 << 21: "Speak",
+            1 << 22: "Mute Members", 1 << 23: "Deafen Members", 1 << 24: "Move Members",
+            1 << 25: "Use VAD", 1 << 26: "Change Nickname", 1 << 27: "Manage Nicknames",
+            1 << 28: "Manage Roles", 1 << 29: "Manage Webhooks", 1 << 30: "Manage Emojis and Stickers",
+            1 << 31: "Use Application Commands", 1 << 32: "Request to Speak", 1 << 33: "Manage Events",
+            1 << 34: "Manage Threads", 1 << 35: "Create Public Threads", 1 << 36: "Create Private Threads",
+            1 << 37: "Use External Stickers", 1 << 38: "Send Messages in Threads",
+            1 << 39: "Use Embedded Activities", 1 << 40: "Moderate Members",
+            1 << 41: "View Creator Monitization Insights", 1 << 42: "Use Soundboard",
+            1 << 43: "Use External Sounds", 1 << 44: "Send Voice Messages"
+        }
+
+        def resolve_perms(mask):
+            mask = int(mask)
+            return [name for bit, name in PERMISSIONS.items() if mask & bit]
+
+        formatted_roles = []
+        for r in roles_data:
+            resolved = resolve_perms(r['permissions'])
+            role_info = {
+                "id": r['id'],
+                "name": r['name'],
+                "color": r['color'],
+                "position": r['position'],
+                "permissions_raw": r['permissions'],
+                "permissions_resolved": resolved
+            }
+            formatted_roles.append(json.dumps(role_info, indent=2))
+        
+        return [TextContent(type="text", text="\\n---\\n".join(formatted_roles))]
     raise ValueError(f"Unknown tool: {name}")
 
 async def main():

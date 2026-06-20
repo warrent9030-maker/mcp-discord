@@ -12,12 +12,12 @@ ENV UV_LINK_MODE=copy
 # 1. Copy only the dependency files first to leverage Docker cache
 COPY pyproject.toml uv.lock ./
 
-# 2. Copy the actual source code
+# 2. Install dependencies only (skip project install to avoid path issues)
+RUN uv sync --frozen --no-dev --no-install-project
+
+# 3. Copy the actual source code
 COPY src/ ./src/
 COPY README.md ./
-
-# 3. Install dependencies only (skip project install to avoid path issues)
-RUN uv sync --frozen --no-dev --no-install-project
 
 # Update PATH to include the virtual environment's bin and PYTHONPATH for src
 ENV PATH="/app/.venv/bin:$PATH"

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import json
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict, Optional
 from functools import wraps
 import discord
@@ -484,6 +484,127 @@ async def list_tools() -> List[Tool]:
                 },
                 'required': ['server_id', 'verification_level']
             }
+        ),
+        Tool(
+            name='bulk_delete_messages',
+            description='Bulk delete multiple messages in a channel.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'channel_id': {
+                        'type': 'string',
+                        'description': 'Discord channel ID'
+                    },
+                    'message_ids': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': 'List of message IDs to delete'
+                    }
+                },
+                'required': ['channel_id', 'message_ids']
+            }
+        ),
+        Tool(
+            name='timeout_member',
+            description='Timeout a member in a Discord server (guild).',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'user_id': {
+                        'type': 'string',
+                        'description': 'User ID to timeout'
+                    },
+                    'duration_minutes': {
+                        'type': 'number',
+                        'description': 'Duration of the timeout in minutes (max 40320 / 28 days). Set to 0 to remove timeout.'
+                    },
+                    'reason': {
+                        'type': 'string',
+                        'description': 'Reason for the timeout'
+                    }
+                },
+                'required': ['server_id', 'user_id', 'duration_minutes']
+            }
+        ),
+        Tool(
+            name='kick_member',
+            description='Kick a member from a Discord server.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'user_id': {
+                        'type': 'string',
+                        'description': 'User ID to kick'
+                    },
+                    'reason': {
+                        'type': 'string',
+                        'description': 'Reason for kicking'
+                    }
+                },
+                'required': ['server_id', 'user_id']
+            }
+        ),
+        Tool(
+            name='ban_member',
+            description='Ban a member from a Discord server.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'user_id': {
+                        'type': 'string',
+                        'description': 'User ID to ban'
+                    },
+                    'delete_message_days': {
+                        'type': 'number',
+                        'description': 'Number of days of messages to delete (0-7)',
+                        'default': 0
+                    },
+                    'reason': {
+                        'type': 'string',
+                        'description': 'Reason for banning'
+                    }
+                },
+                'required': ['server_id', 'user_id']
+            }
+        ),
+        Tool(
+            name='get_audit_logs',
+            description='Retrieve audit logs for a Discord server.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'user_id': {
+                        'type': 'string',
+                        'description': 'Filter by user ID'
+                    },
+                    'action_type': {
+                        'type': 'integer',
+                        'description': 'Filter by audit log action type'
+                    },
+                    'limit': {
+                        'type': 'integer',
+                        'description': 'Maximum number of entries to retrieve (max 100)',
+                        'default': 50
+                    }
+                },
+                'required': ['server_id']
+            }
         )
     ]
 
@@ -655,6 +776,117 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 updated_guild = await resp.json()
                 
         return [TextContent(type='text', text=f"Guild verification level updated successfully: {json.dumps(updated_guild, indent=2)}")]
+
+    elif name == 'bulk_delete_messages':
+        channel_id = arguments['channel_id']
+        message_ids = arguments['message_ids']
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages/bulk-delete"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        payload = {"messages": [str(mid) for mid in message_ids]}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status != 204:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error bulk deleting messages: {resp.status} - {error_text}")]
+        return [TextContent(type='text', text=f"Successfully deleted {len(message_ids)} messages.")]
+
+    elif name == 'timeout_member':
+        server_id = arguments['server_id']
+        user_id = arguments['user_id']
+        duration_minutes = arguments['duration_minutes']
+        reason = arguments.get('reason')
+        
+        url = f"https://discord.com/api/v10/guilds/{server_id}/members/{user_id}"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        if duration_minutes > 0:
+            timeout_until = (datetime.now(timezone.utc) + timedelta(minutes=duration_minutes)).isoformat()
+        else:
+            timeout_until = None
+            
+        payload = {"communication_disabled_until": timeout_until}
+        if reason:
+            headers["X-Audit-Log-Reason"] = reason
+            
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error setting timeout: {resp.status} - {error_text}")]
+                
+        return [TextContent(type='text', text=f"Member timeout updated. Duration: {duration_minutes} minutes.")]
+
+    elif name == 'kick_member':
+        server_id = arguments['server_id']
+        user_id = arguments['user_id']
+        reason = arguments.get('reason')
+        
+        url = f"https://discord.com/api/v10/guilds/{server_id}/members/{user_id}"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        if reason:
+            headers["X-Audit-Log-Reason"] = reason
+            
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(url, headers=headers) as resp:
+                if resp.status != 204:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error kicking member: {resp.status} - {error_text}")]
+                    
+        return [TextContent(type='text', text="Member kicked successfully.")]
+
+    elif name == 'ban_member':
+        server_id = arguments['server_id']
+        user_id = arguments['user_id']
+        reason = arguments.get('reason')
+        delete_message_days = arguments.get('delete_message_days', 0)
+        
+        url = f"https://discord.com/api/v10/guilds/{server_id}/bans/{user_id}"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        if reason:
+            headers["X-Audit-Log-Reason"] = reason
+            
+        payload = {"delete_message_seconds": int(delete_message_days * 86400)}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.put(url, headers=headers, json=payload) as resp:
+                if resp.status != 204:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error banning member: {resp.status} - {error_text}")]
+                    
+        return [TextContent(type='text', text="Member banned successfully.")]
+
+    elif name == 'get_audit_logs':
+        server_id = arguments['server_id']
+        user_id = arguments.get('user_id')
+        action_type = arguments.get('action_type')
+        limit = min(arguments.get('limit', 50), 100)
+        
+        params = {"limit": limit}
+        if user_id:
+            params["user_id"] = user_id
+        if action_type:
+            params["action_type"] = action_type
+            
+        url = f"https://discord.com/api/v10/guilds/{server_id}/audit-logs"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error fetching audit logs: {resp.status} - {error_text}")]
+                logs = await resp.json()
+                
+        return [TextContent(type='text', text=json.dumps(logs, indent=2))]
         
     raise ValueError(f'Unknown tool: {name}')
 

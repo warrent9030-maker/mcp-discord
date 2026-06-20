@@ -2,8 +2,10 @@ import os
 import sys
 import asyncio
 import logging
+import json
+import aiohttp
 from datetime import datetime
-from typing import Any, List
+from typing import Any, List, Dict
 from functools import wraps
 import discord
 from discord.ext import commands
@@ -58,7 +60,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if not AUTH_TOKEN:
             return await call_next(request)
-        
+            
         # Check Authorization header or auth_token query param
         auth_header = request.headers.get('Authorization')
         query_token = request.query_params.get('auth_token')
@@ -68,11 +70,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
             provided_token = auth_header.split(' ')[1]
         elif query_token:
             provided_token = query_token
-
+            
         if provided_token != AUTH_TOKEN:
             return JSONResponse({'error': 'Unauthorized'}, status_code=401)
-        
+            
         return await call_next(request)
+
+def resolve_permissions(value: int) -> List[str]:
+    """Resolves a permission bitmask into a list of human-readable strings."""
+    perms = discord.Permissions(value)
+    resolved = []
+    for name, enabled in perms:
+        if enabled:
+            # Format permission name: manage_roles -> Manage Roles
+            formatted = name.replace('_', ' ').title()
+            resolved.append(formatted)
+    return resolved
 
 @app.list_tools()
 async def list_tools() -> List[Tool]:
@@ -374,7 +387,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name='list_roles',
-            description='Get a list of all roles in a Discord server',
+            description='Get a list of all roles in a Discord server with detailed metadata.',
             inputSchema={
                 'type': 'object',
                 'properties': {
@@ -459,9 +472,35 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         servers = [f'{g.name} ({g.id})' for g in discord_client.guilds]
         return [TextContent(type='text', text='\n'.join(servers))]
     elif name == 'list_roles':
-        guild = await discord_client.fetch_guild(int(arguments['server_id']))
-        roles = [f'{r.name} ({r.id})' for r in guild.roles]
-        return [TextContent(type='text', text='\n'.join(roles))]
+        server_id = arguments['server_id']
+        url = f"https://discord.com/api/v10/guilds/{server_id}/roles"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error fetching roles: {resp.status} - {error_text}")]
+                roles_data = await resp.json()
+        
+        detailed_roles = []
+        for r in roles_data:
+            permissions_raw = int(r.get('permissions', 0))
+            resolved = resolve_permissions(permissions_raw)
+            
+            role_info = {
+                'id': r['id'],
+                'name': r['name'],
+                'color': f"#{r.get('color', 0):06x}",
+                'position': r.get('position', 0),
+                'permissions_raw': permissions_raw,
+                'permissions_resolved': resolved
+            }
+            detailed_roles.append(role_info)
+            
+        return [TextContent(type='text', text=json.dumps(detailed_roles, indent=2))]
+        
     raise ValueError(f'Unknown tool: {name}')
 
 async def main():

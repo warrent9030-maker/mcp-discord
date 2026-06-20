@@ -466,6 +466,24 @@ async def list_tools() -> List[Tool]:
                 },
                 'required': ['channel_id', 'overwrite_id', 'allow', 'deny', 'type']
             }
+        ),
+        Tool(
+            name='update_guild_verification_level',
+            description='Update the verification level of a Discord server.',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'server_id': {
+                        'type': 'string',
+                        'description': 'Discord server (guild) ID'
+                    },
+                    'verification_level': {
+                        'type': 'integer',
+                        'description': 'The new verification level (0-4). 0: None, 1: Low, 2: Medium, 3: High, 4: Very High'
+                    }
+                },
+                'required': ['server_id', 'verification_level']
+            }
         )
     ]
 
@@ -617,6 +635,26 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                     return [TextContent(type='text', text=f"Error updating channel permissions: {resp.status} - {error_text}")]
                 
         return [TextContent(type='text', text="Channel permissions updated successfully.")]
+
+    elif name == 'update_guild_verification_level':
+        server_id = arguments['server_id']
+        verification_level = arguments['verification_level']
+        url = f"https://discord.com/api/v10/guilds/{server_id}"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "verification_level": verification_level
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.patch(url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error updating guild: {resp.status} - {error_text}")]
+                updated_guild = await resp.json()
+                
+        return [TextContent(type='text', text=f"Guild verification level updated successfully: {json.dumps(updated_guild, indent=2)}")]
         
     raise ValueError(f'Unknown tool: {name}')
 

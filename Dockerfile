@@ -9,11 +9,11 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
-# 1. Copy only the dependency files first to leverage Docker cache
-COPY pyproject.toml uv.lock ./
+# 1. Copy pyproject.toml first
+COPY pyproject.toml ./
 
-# 2. Install dependencies only (skip project install to avoid path issues)
-RUN uv sync --frozen --no-dev --no-install-project
+# 2. Install dependencies (it will generate a lockfile on the fly since we aren't using --frozen or copying uv.lock)
+RUN uv sync --no-dev --no-install-project
 
 # 3. Copy the actual source code
 COPY src/ ./src/

@@ -436,6 +436,36 @@ async def list_tools() -> List[Tool]:
                 },
                 'required': ['server_id', 'role_id']
             }
+        ),
+        Tool(
+            name='update_channel_permissions',
+            description='Update permission overwrites for a channel (lockdown).',
+            inputSchema={
+                'type': 'object',
+                'properties': {
+                    'channel_id': {
+                        'type': 'string',
+                        'description': 'Discord channel ID'
+                    },
+                    'overwrite_id': {
+                        'type': 'string',
+                        'description': 'Role or user ID to override (e.g. server ID for @everyone)'
+                    },
+                    'allow': {
+                        'type': ['string', 'number'],
+                        'description': 'Bitmask of allowed permissions'
+                    },
+                    'deny': {
+                        'type': ['string', 'number'],
+                        'description': 'Bitmask of denied permissions'
+                    },
+                    'type': {
+                        'type': 'integer',
+                        'description': '0 for role, 1 for member'
+                    }
+                },
+                'required': ['channel_id', 'overwrite_id', 'allow', 'deny', 'type']
+            }
         )
     ]
 
@@ -564,6 +594,29 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
                 updated_role = await resp.json()
                 
         return [TextContent(type='text', text=f"Role updated successfully: {json.dumps(updated_role, indent=2)}")]
+        
+    elif name == 'update_channel_permissions':
+        channel_id = arguments['channel_id']
+        overwrite_id = arguments['overwrite_id']
+        url = f"https://discord.com/api/v10/channels/{channel_id}/permissions/{overwrite_id}"
+        headers = {
+            "Authorization": f"Bot {DISCORD_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "allow": str(arguments['allow']),
+            "deny": str(arguments['deny']),
+            "type": int(arguments['type'])
+        }
+                    
+        async with aiohttp.ClientSession() as session:
+            async with session.put(url, headers=headers, json=payload) as resp:
+                if resp.status != 204:
+                    error_text = await resp.text()
+                    return [TextContent(type='text', text=f"Error updating channel permissions: {resp.status} - {error_text}")]
+                
+        return [TextContent(type='text', text="Channel permissions updated successfully.")]
         
     raise ValueError(f'Unknown tool: {name}')
 
